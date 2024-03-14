@@ -3,15 +3,39 @@
 #include "wifi_config_setup.h"
 #include "wifi_connect_common.h"
 
+#include "lwip/ip_addr.h"
+#include "lwip/raw.h"
+#include "lwip/ip.h"
+#include "lwip/icmp.h"
+#include "lwip/inet_chksum.h"
+
+
+#ifndef ECHO_HEADER_SIZE
+#define ECHO_HEADER_SIZE sizeof(struct icmp_echo_hdr)
+#endif
+
 static BOARD_STATE bd_state = DISCONECTED;
 
-char* ip_address = NULL;
+char* ip_address_str = NULL;
+struct raw_pcb * ping_pcb = NULL;
+ip_addr_t ip_ap = { .addr = 0 };
+
 void free_resources()
 {
-	if (ip_address){
-		nrc_mem_free(ip_address);
-		ip_address = NULL;
+	if (ip_address_str){
+		nrc_mem_free(ip_address_str);
+		ip_address_str = NULL;
 	}
+
+	if (ping_pcb){
+		raw_remove(ping_pcb);
+		nrc_mem_free(ping_pcb);
+		ping_pcb = NULL;
+	}
+	// if (ping_conn){
+	// 	nrc_mem_free(ping_conn);
+	// 	ping_conn = NULL;
+	// }
 }
 
 nrc_err_t connect_wifi(WIFI_CONFIG* param)
@@ -138,14 +162,79 @@ nrc_err_t get_ip_address()
 		}
 		_delay_ms(1000);
 	}
-	tWIFI_STATUS code = nrc_wifi_get_ip_address(0, &ip_address);
-	nrc_usr_print("[%s]: IP is %s", __func__, ip_address);
+	tWIFI_STATUS code = nrc_wifi_get_ip_address(0, &ip_address_str);
+	nrc_usr_print("[%s]: IP is %s\r\n", __func__, ip_address_str);
 	return code == WIFI_SUCCESS ? NRC_SUCCESS : NRC_FAIL;
+}
+
+u8_t on_recieve_ping_callback(void *arg, struct raw_pcb *pcb, struct pbuf *p,
+		const ip_addr_t *addr)
+{
+	nrc_usr_print("[%s]: echo reply from %s", __func__, ipaddr_ntoa(addr));
+	nrc_usr_print("[%s]: ip address is %s equal\r\n", __func__, addr->addr == ip_ap.addr ? "" : "no");
+	return 0;
+}
+
+nrc_err_t init_ping_echo()
+{
+	int point_count = 0;
+	for(int i=0;ip_address_str[i] != '\0';i++){
+		if (point_count >= 3){
+			ip_address_str[i] = '1';
+			ip_address_str[i + 1] = '\0';
+		}
+		
+		if (ip_address_str[i] == '.'){
+			point_count++;
+		}
+	}
+
+	if(!ipaddr_aton(ip_address_str, &ip_ap)){
+		nrc_usr_print("[%s]: error on parsing ip address\r\n", __func__);
+		return NRC_FAIL;
+	}
+
+	nrc_usr_print("[%s]:Gateway is %s\r\n", __func__, ip_address_str);
+
+	ping_pcb = raw_new(IP_PROTO_ICMP);
+	if (ping_pcb == NULL){
+		nrc_usr_print("[%s]: Error for allocate ping PCB\r\n", __func__);
+		return NRC_FAIL;
+	}
+
+	// Bind callback for receiving
+	raw_recv(ping_pcb, on_recieve_ping_callback, NULL);
+	return NRC_SUCCESS;
+}
+
+nrc_err_t send_echo()
+{
+	static u16_t seq_num = 0;
+	struct pbuf *p;
+	p = pbuf_alloc(PBUF_IP, ECHO_HEADER_SIZE + PING_DATA_SIZE, PBUF_RAM);
+	if (p == NULL){
+		nrc_usr_print("[%s]: error on allocating packet data\r\n", __func__);
+		return NRC_FAIL;
+	}
+	struct icmp_echo_hdr * iecho = (struct icmp_echo_hdr *)p->payload;
+	iecho->type = ICMP_ECHO;
+	iecho->code = 0;
+	iecho->chksum = 0;
+	iecho->id = 0;
+	iecho->seqno = htons(++seq_num);
+
+	memset(p->payload + ECHO_HEADER_SIZE, 0, PING_DATA_SIZE);
+
+	iecho->chksum = inet_chksum(iecho, ECHO_HEADER_SIZE + PING_DATA_SIZE);
+
+	raw_sendto(ping_pcb, p, &ip_ap);
+
+	pbuf_free(p);
+	return NRC_SUCCESS;
 }
 
 void start_simple_icmp(WIFI_CONFIG* param)
 {
-
 	while(1){
 		switch(bd_state){
 			case DISCONECTED:
@@ -162,11 +251,21 @@ void start_simple_icmp(WIFI_CONFIG* param)
 					free_resources();
 				}
 				break;
+			case INITED_IP:
+				if (!init_ping_echo()){
+					bd_state = SENDING_ECHO;
+				} else {
+					free_resources();
+					bd_state = CONNETED_FOR_SSID;
+				}
+				break;
+			case SENDING_ECHO:
+				send_echo();
+				_delay_ms(DELAY_TIME);
+				break;
 			default:
 				break;
 		}
-
-
 	}
 }
 
@@ -186,6 +285,7 @@ void user_init(void)
 	nrc_usr_print("[%s] \n", __func__);
 
 	nrc_wifi_set_config(param);
+	nrc_wifi_register_event_handler(0, nrc_wifi_event_dispatcher);
   start_simple_icmp(param);
 	
 }

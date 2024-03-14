@@ -4,14 +4,21 @@
 #define PROGRAM "sample_icmp"
 #define MAX_COUNT_TRIES 5
 
+#ifndef DELAY_TIME
+#define DELAY_TIME 5000
+#endif
+
 typedef enum _BOARD_STATE
 {
   DISCONECTED = 0,
   CONNETED_FOR_SSID,
   INITED_IP,
-  SEND_ECHO,
-  RECIVE_ECHO
+  SENDING_ECHO,
 } BOARD_STATE;
+
+#ifndef PING_DATA_SIZE
+#define PING_DATA_SIZE  32
+#endif
 
 
 #endif
