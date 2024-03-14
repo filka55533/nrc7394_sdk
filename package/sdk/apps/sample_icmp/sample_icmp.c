@@ -286,6 +286,6 @@ void user_init(void)
 
 	nrc_wifi_set_config(param);
 	nrc_wifi_register_event_handler(0, nrc_wifi_event_dispatcher);
-  start_simple_icmp(param);
+	start_simple_icmp(param);
 	
 }
