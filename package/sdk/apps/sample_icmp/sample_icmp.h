@@ -5,7 +5,7 @@
 #define MAX_COUNT_TRIES 5
 
 #ifndef DELAY_TIME
-#define DELAY_TIME 5000
+#define DELAY_TIME 1000
 #endif
 
 typedef enum _BOARD_STATE

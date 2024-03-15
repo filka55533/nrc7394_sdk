@@ -9,17 +9,19 @@
 #include "lwip/icmp.h"
 #include "lwip/inet_chksum.h"
 
+#include "led_routine.h"
 
 #ifndef ECHO_HEADER_SIZE
 #define ECHO_HEADER_SIZE sizeof(struct icmp_echo_hdr)
 #endif
+
+#define LED_DELAY 500
 
 static BOARD_STATE bd_state = DISCONECTED;
 
 char* ip_address_str = NULL;
 struct raw_pcb * ping_pcb = NULL;
 ip_addr_t ip_ap = { .addr = 0 };
-
 void free_resources()
 {
 	if (ip_address_str){
@@ -32,10 +34,6 @@ void free_resources()
 		nrc_mem_free(ping_pcb);
 		ping_pcb = NULL;
 	}
-	// if (ping_conn){
-	// 	nrc_mem_free(ping_conn);
-	// 	ping_conn = NULL;
-	// }
 }
 
 nrc_err_t connect_wifi(WIFI_CONFIG* param)
@@ -172,6 +170,9 @@ u8_t on_recieve_ping_callback(void *arg, struct raw_pcb *pcb, struct pbuf *p,
 {
 	nrc_usr_print("[%s]: echo reply from %s", __func__, ipaddr_ntoa(addr));
 	nrc_usr_print("[%s]: ip address is %s equal\r\n", __func__, addr->addr == ip_ap.addr ? "" : "no");
+	nrc_usr_print("Result of set: %s\r\n", set_pin_on_led() == NRC_SUCCESS ? "OK" : "FAIL");
+	_delay_ms(LED_DELAY);
+	nrc_usr_print("Result of reset: %s\r\n",reset_pin_on_led() == NRC_SUCCESS ? "OK" : "FAIL");
 	return 0;
 }
 
@@ -233,6 +234,11 @@ nrc_err_t send_echo()
 	return NRC_SUCCESS;
 }
 
+void timer_routine()
+{
+	
+}
+
 void start_simple_icmp(WIFI_CONFIG* param)
 {
 	while(1){
@@ -253,6 +259,8 @@ void start_simple_icmp(WIFI_CONFIG* param)
 				break;
 			case INITED_IP:
 				if (!init_ping_echo()){
+					char* led_message = init_led() == NRC_SUCCESS ? "Success" : "Error";
+					nrc_usr_print("[%s]: %s on init led\r\n", __func__, led_message);
 					bd_state = SENDING_ECHO;
 				} else {
 					free_resources();
@@ -287,5 +295,4 @@ void user_init(void)
 	nrc_wifi_set_config(param);
 	nrc_wifi_register_event_handler(0, nrc_wifi_event_dispatcher);
 	start_simple_icmp(param);
-	
 }
