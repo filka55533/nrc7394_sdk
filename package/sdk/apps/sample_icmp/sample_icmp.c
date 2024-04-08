@@ -17,7 +17,12 @@
 
 #define LED_DELAY 500
 
-static BOARD_STATE bd_state = DISCONECTED;
+volatile BOARD_STATE bd_state = DISCONECTED;
+
+#ifdef ENABLE_SLEEP
+#include "api_ps.h"
+volatile int is_recieve = 0;
+#endif
 
 char* ip_address_str = NULL;
 struct raw_pcb * ping_pcb = NULL;
@@ -125,6 +130,9 @@ nrc_err_t connect_wifi(WIFI_CONFIG* param)
 		}
 	}
 
+	#ifdef ENABLE_SLEEP
+	nrc_wifi_set_listen_interval(0, 20);
+	#endif
 	return NRC_SUCCESS;
 }
 
@@ -173,6 +181,11 @@ u8_t on_recieve_ping_callback(void *arg, struct raw_pcb *pcb, struct pbuf *p,
 	nrc_usr_print("Result of set: %s\r\n", set_pin_on_led() == NRC_SUCCESS ? "OK" : "FAIL");
 	_delay_ms(LED_DELAY);
 	nrc_usr_print("Result of reset: %s\r\n",reset_pin_on_led() == NRC_SUCCESS ? "OK" : "FAIL");
+	
+	#ifdef ENABLE_SLEEP
+	is_recieve = 1;
+	#endif
+	
 	return 0;
 }
 
@@ -234,43 +247,52 @@ nrc_err_t send_echo()
 	return NRC_SUCCESS;
 }
 
-void timer_routine()
-{
-	
-}
-
 void start_simple_icmp(WIFI_CONFIG* param)
 {
 	while(1){
 		switch(bd_state){
 			case DISCONECTED:
 				//Try connect for ssid
-				if (!connect_wifi(param)){
+				if (connect_wifi(param) == NRC_SUCCESS){
 					bd_state = CONNETED_FOR_SSID;
 				}
 				break;
 			case CONNETED_FOR_SSID:
 				//Try get IP
-				if (!get_ip_address()){
+				if (get_ip_address() == NRC_SUCCESS){
 					bd_state = INITED_IP;
 				} else {
 					free_resources();
 				}
 				break;
 			case INITED_IP:
-				if (!init_ping_echo()){
-					char* led_message = init_led() == NRC_SUCCESS ? "Success" : "Error";
-					nrc_usr_print("[%s]: %s on init led\r\n", __func__, led_message);
+				if (init_ping_echo() == NRC_SUCCESS){
 					bd_state = SENDING_ECHO;
 				} else {
 					free_resources();
 					bd_state = CONNETED_FOR_SSID;
 				}
 				break;
+			
 			case SENDING_ECHO:
 				send_echo();
+			#ifndef ENABLE_SLEEP
 				_delay_ms(DELAY_TIME);
 				break;
+			#else
+				bd_state = WAIT_REPLY;
+				break;
+			case WAIT_REPLY:
+				if (is_recieve) {
+					is_recieve = 0;
+					nrc_usr_print("[%s]: Go sleep\r\n", __func__);
+					nrc_ps_deep_sleep(DELAY_TIME);
+					nrc_usr_print("[%s]: Woke up\r\n", __func__);
+					bd_state = SENDING_ECHO;
+				}
+				break;
+			#endif
+			
 			default:
 				break;
 		}
@@ -289,10 +311,9 @@ void user_init(void)
 	WIFI_CONFIG wifi_config;
 	WIFI_CONFIG* param = &wifi_config;
 	
-	memset(param, 0x0, WIFI_CONFIG_SIZE);
 	nrc_usr_print("[%s] \n", __func__);
-
 	nrc_wifi_set_config(param);
 	nrc_wifi_register_event_handler(0, nrc_wifi_event_dispatcher);
+	init_led();
 	start_simple_icmp(param);
 }
